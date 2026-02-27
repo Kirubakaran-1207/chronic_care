@@ -12,6 +12,7 @@
     "@types/recharts": "^1.8.29",
     "groq-sdk": "^0.37.0",
     "lucide-react": "^0.575.0",
+    "mongoose": "^9.2.3",
     "next": "16.1.6",
     "pdf-parse": "^1.1.1",
     "react": "19.2.3",
@@ -27,6 +28,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "xlsx": "^0.18.5"
   }
 }

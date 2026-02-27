@@ -2,7 +2,7 @@
 
 import {
     Activity, BarChart3, Bell, Globe, Heart, LayoutDashboard, LogOut,
-    Settings, Shield, Stethoscope, Users,
+    Settings, Shield, Stethoscope, Users, Pill, Lock,
 } from "lucide-react";
 import { ViewKey } from "@/app/page";
 
@@ -14,6 +14,8 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ activeView, setActiveView, onLogout, userRole }: SidebarProps) {
+    const isDoctor = userRole === "doctor";
+
     return (
         <div
             className="flex flex-col h-full w-64 text-white shrink-0 relative"
@@ -46,30 +48,60 @@ export default function Sidebar({ activeView, setActiveView, onLogout, userRole 
             <div className="mx-3 mb-4 rounded-2xl px-3 py-3 relative" style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)" }}>
                 <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xs font-black shadow-md"
-                        style={{ background: "linear-gradient(135deg, #ff8fab, #c9184a)" }}>
-                        {userRole === "doctor" ? "PN" : "GA"}
+                        style={{ background: isDoctor ? "linear-gradient(135deg, #ff8fab, #c9184a)" : "linear-gradient(135deg, #ffd43b, #f08c00)" }}>
+                        {isDoctor ? "PN" : "GA"}
                     </div>
-                    <div>
-                        <p className="text-sm font-semibold">{userRole === "doctor" ? "Dr. Priya Nair" : "Govt. Admin"}</p>
-                        <p className="text-xs" style={{ color: "rgba(255,255,255,0.5)" }}>
-                            {userRole === "doctor" ? "Cardiologist · MBBS" : "Health Ministry · NHM"}
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold truncate">{isDoctor ? "Dr. Priya Nair" : "Govt. Admin"}</p>
+                        <p className="text-xs truncate" style={{ color: "rgba(255,255,255,0.5)" }}>
+                            {isDoctor ? "Cardiologist · MBBS" : "Health Ministry · NHM"}
                         </p>
                     </div>
+                    {/* Role Badge */}
+                    <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full font-bold"
+                        style={{
+                            background: isDoctor ? "rgba(34,197,94,0.25)" : "rgba(251,191,36,0.25)",
+                            color: isDoctor ? "#86efac" : "#fde68a"
+                        }}>
+                        {isDoctor ? "MD" : "Admin"}
+                    </span>
                 </div>
             </div>
 
             {/* Nav */}
             <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto pb-2">
-                <SectionLabel text="DOCTOR PORTAL" />
-                <NavItem icon={<LayoutDashboard size={15} />} label="Patient Overview" active={activeView === "overview"} onClick={() => setActiveView("overview")} />
-                <NavItem icon={<Users size={15} />} label="My Patients" active={activeView === "myPatients"} onClick={() => setActiveView("myPatients")} />
-                <NavItem icon={<Stethoscope size={15} />} label="Appointments" active={activeView === "appointments"} onClick={() => setActiveView("appointments")} />
-                <NavItem icon={<Activity size={15} />} label="Health Monitoring" active={activeView === "healthMonitoring"} onClick={() => setActiveView("healthMonitoring")} />
+                {/* ── Doctor Portal ─────────────────────────────────── */}
+                {isDoctor && (
+                    <>
+                        <SectionLabel text="DOCTOR PORTAL" />
+                        <NavItem icon={<LayoutDashboard size={15} />} label="Patient Overview" active={activeView === "overview"} onClick={() => setActiveView("overview")} />
+                        <NavItem icon={<Users size={15} />} label="My Patients" active={activeView === "myPatients"} onClick={() => setActiveView("myPatients")} />
+                        <NavItem icon={<Stethoscope size={15} />} label="Appointments" active={activeView === "appointments"} onClick={() => setActiveView("appointments")} />
+                        <NavItem icon={<Activity size={15} />} label="Health Monitoring" active={activeView === "healthMonitoring"} onClick={() => setActiveView("healthMonitoring")} />
+                        <NavItem icon={<Pill size={15} />} label="Prescriptions" active={activeView === "prescriptions"} onClick={() => setActiveView("prescriptions")} />
+                        <NavItem icon={<Bell size={15} />} label="Alert Management" active={activeView === "alertManagement"} onClick={() => setActiveView("alertManagement")} />
 
-                <SectionLabel text="GOVERNMENT PORTAL" />
-                <NavItem icon={<Globe size={15} />} label="Regional Analytics" active={activeView === "regionalAnalytics"} onClick={() => setActiveView("regionalAnalytics")} />
-                <NavItem icon={<BarChart3 size={15} />} label="Disease Trends" active={activeView === "diseaseTrends"} onClick={() => setActiveView("diseaseTrends")} />
-                <NavItem icon={<Bell size={15} />} label="Alert Management" active={activeView === "alertManagement"} onClick={() => setActiveView("alertManagement")} />
+                        {/* Locked admin pages — visible but greyed out */}
+                        <SectionLabel text="GOVERNMENT PORTAL" />
+                        <LockedNavItem icon={<Globe size={15} />} label="Regional Analytics" />
+                        <LockedNavItem icon={<BarChart3 size={15} />} label="Disease Trends" />
+                    </>
+                )}
+
+                {/* ── Admin Portal ───────────────────────────────────── */}
+                {!isDoctor && (
+                    <>
+                        <SectionLabel text="GOVERNMENT PORTAL" />
+                        <NavItem icon={<Globe size={15} />} label="Regional Analytics" active={activeView === "regionalAnalytics"} onClick={() => setActiveView("regionalAnalytics")} />
+                        <NavItem icon={<BarChart3 size={15} />} label="Disease Trends" active={activeView === "diseaseTrends"} onClick={() => setActiveView("diseaseTrends")} />
+
+                        {/* Locked doctor pages — visible but greyed out */}
+                        <SectionLabel text="DOCTOR PORTAL" />
+                        <LockedNavItem icon={<LayoutDashboard size={15} />} label="Patient Overview" />
+                        <LockedNavItem icon={<Users size={15} />} label="My Patients" />
+                        <LockedNavItem icon={<Pill size={15} />} label="Prescriptions" />
+                    </>
+                )}
             </nav>
 
             {/* Bottom */}
@@ -79,7 +111,7 @@ export default function Sidebar({ activeView, setActiveView, onLogout, userRole 
             </div>
 
             <div className="px-5 pb-4">
-                <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>v2.5.0 · HIPAA Compliant · Powered by Groq</p>
+                <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>v3.0.0 · HIPAA Compliant · RBAC Active</p>
             </div>
         </div>
     );
@@ -104,5 +136,18 @@ function NavItem({ icon, label, active, onClick, danger = false }: {
             {label}
             {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-white/60" />}
         </button>
+    );
+}
+
+/** Greyed-out nav item showing the page exists but requires a different role */
+function LockedNavItem({ icon, label }: { icon: React.ReactNode; label: string }) {
+    return (
+        <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-not-allowed select-none"
+            style={{ color: "rgba(255,255,255,0.25)" }}
+            title="Access restricted — requires a different role">
+            <span style={{ opacity: 0.4 }}>{icon}</span>
+            {label}
+            <Lock size={11} className="ml-auto" style={{ color: "rgba(255,255,255,0.3)" }} />
+        </div>
     );
 }

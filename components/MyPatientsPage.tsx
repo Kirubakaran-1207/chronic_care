@@ -6,8 +6,24 @@ import {
     Users, Download, Send, Search, ChevronUp, ChevronDown,
     Heart, Activity, Droplets, Brain, ChevronRight,
     Upload, FileUp, Loader2, CheckCircle, X, AlertTriangle,
-    UserPlus, RotateCcw,
+    UserPlus, RotateCcw, Trash2,
 } from "lucide-react";
+
+// ── CSV Export helper ────────────────────────────────────────────────────────
+function downloadCSV(patients: Patient[]) {
+    const headers = ["ID", "Name", "Age", "Gender", "Disease", "Risk Level", "Phone", "Email", "Last Visit", "Next Appointment", "Assigned Doctor"];
+    const rows = patients.map(p => [
+        p.id, p.name, p.age, p.gender, p.disease, p.riskLevel,
+        p.phone ?? "", p.email ?? "",
+        p.lastVisit, p.nextAppointment, p.assignedDoctor,
+    ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `my-patients-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+}
 
 type SortKey = "name" | "age" | "riskLevel" | "disease" | "lastVisit" | "nextAppointment";
 type SortDir = "asc" | "desc";
@@ -310,6 +326,8 @@ export default function MyPatientsPage() {
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [showModal, setShowModal] = useState(false);
     const [newlyAdded, setNewlyAdded] = useState<string[]>([]);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
     // Fetch patients from the live API (reads from data/patients.json)
     const fetchPatients = async () => {
@@ -368,7 +386,8 @@ export default function MyPatientsPage() {
                     </p>
                 </div>
                 <div className="flex gap-2">
-                    <button className="flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-all hover:bg-gray-50"
+                    <button onClick={() => downloadCSV(filtered)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-all hover:bg-gray-50"
                         style={{ borderColor: "#e2e8f0", color: "#64748b" }}>
                         <Download size={14} /> Export CSV
                     </button>
@@ -459,6 +478,7 @@ export default function MyPatientsPage() {
                                             { key: "lastVisit", label: "Last Visit" },
                                             { key: "nextAppointment", label: "Next Appt" },
                                             { key: null, label: "" },
+                                            { key: null, label: "Actions" },
                                         ] as { key: SortKey | null; label: string }[]).map((col, i) => (
                                             <th key={i}
                                                 onClick={() => col.key && handleSort(col.key)}
@@ -472,7 +492,7 @@ export default function MyPatientsPage() {
                                 <tbody>
                                     {filtered.length === 0 ? (
                                         <tr>
-                                            <td colSpan={7} className="px-5 py-12 text-center text-sm" style={{ color: "#94a3b8" }}>
+                                            <td colSpan={8} className="px-5 py-12 text-center text-sm" style={{ color: "#94a3b8" }}>
                                                 <Users size={36} className="mx-auto mb-2 opacity-30" />
                                                 No patients match your search.
                                             </td>
@@ -533,11 +553,48 @@ export default function MyPatientsPage() {
                                                             className={`transition-transform ${isExpanded ? "rotate-90" : ""}`}
                                                             style={{ color: "#94a3b8" }} />
                                                     </td>
+                                                    {/* Delete action */}
+                                                    <td className="px-3 py-4" onClick={e => e.stopPropagation()}>
+                                                        {confirmDeleteId === p.id ? (
+                                                            <div className="flex items-center gap-1.5">
+                                                                <button
+                                                                    onClick={async () => {
+                                                                        setDeletingId(p.id);
+                                                                        setConfirmDeleteId(null);
+                                                                        try {
+                                                                            await fetch(`/api/patients/${p.id}`, { method: "DELETE" });
+                                                                            setPatients(prev => prev.filter(x => x.id !== p.id));
+                                                                            if (expandedId === p.id) setExpandedId(null);
+                                                                        } finally { setDeletingId(null); }
+                                                                    }}
+                                                                    className="text-xs px-2 py-1 rounded-lg font-bold text-white"
+                                                                    style={{ background: "#ef4444" }}>
+                                                                    Yes
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => setConfirmDeleteId(null)}
+                                                                    className="text-xs px-2 py-1 rounded-lg font-bold"
+                                                                    style={{ background: "#f1f5f9", color: "#64748b" }}>
+                                                                    No
+                                                                </button>
+                                                            </div>
+                                                        ) : (
+                                                            <button
+                                                                onClick={() => setConfirmDeleteId(p.id)}
+                                                                disabled={deletingId === p.id}
+                                                                className="p-1.5 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-40"
+                                                                title="Remove patient">
+                                                                {deletingId === p.id
+                                                                    ? <Loader2 size={14} style={{ color: "#ef4444" }} className="spin" />
+                                                                    : <Trash2 size={14} style={{ color: "#ef4444" }} />}
+                                                            </button>
+                                                        )}
+                                                    </td>
                                                 </tr>
 
                                                 {isExpanded && (
                                                     <tr key={`${p.id}-exp`} style={{ background: "#f0f4ff" }}>
-                                                        <td colSpan={7} className="px-5 py-4">
+                                                        <td colSpan={8} className="px-5 py-4">
                                                             <div className="grid grid-cols-3 gap-4 fade-in">
                                                                 <div>
                                                                     <p className="text-xs font-bold mb-2" style={{ color: "#8898aa" }}>TOP METRICS</p>

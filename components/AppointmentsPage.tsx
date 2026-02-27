@@ -1,11 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { mockPatients } from "@/lib/mockData";
-import { Calendar, Clock, CheckCircle, XCircle, AlertCircle, Plus, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import {
+    Calendar, Clock, CheckCircle, XCircle, AlertCircle, Plus,
+    ChevronLeft, ChevronRight, X, Loader2, Heart, Activity,
+    Droplets, Brain, AlertTriangle,
+} from "lucide-react";
 
 interface Appointment {
-    id: string;
+    _id?: string;
+    appointmentId: string;
     patientId: string;
     patientName: string;
     disease: string;
@@ -14,258 +18,378 @@ interface Appointment {
     time: string;
     type: string;
     status: "Confirmed" | "Pending" | "Completed" | "Cancelled";
+    doctor?: string;
+    notes?: string;
 }
 
-const mockAppointments: Appointment[] = [
-    { id: "A001", patientId: "PAT-005", patientName: "Ravi Chandrasekaran", disease: "Heart", riskLevel: "High", date: "2026-02-27", time: "09:00", type: "Urgent Review", status: "Confirmed" },
-    { id: "A002", patientId: "PAT-003", patientName: "Venkatesh Iyer", disease: "BP", riskLevel: "High", date: "2026-02-27", time: "10:30", type: "Follow-up", status: "Confirmed" },
-    { id: "A003", patientId: "PAT-001", patientName: "Arjun Sharma", disease: "Heart", riskLevel: "High", date: "2026-02-27", time: "12:00", type: "Cardiac Check", status: "Pending" },
-    { id: "A004", patientId: "PAT-002", patientName: "Meera Krishnamurthy", disease: "Sugar", riskLevel: "Medium", date: "2026-02-27", time: "14:30", type: "Diabetes Review", status: "Completed" },
-    { id: "A005", patientId: "PAT-004", patientName: "Lakshmi Patel", disease: "Stress", riskLevel: "Low", date: "2026-02-28", time: "09:30", type: "Counselling", status: "Confirmed" },
-    { id: "A006", patientId: "PAT-006", patientName: "Divya Menon", disease: "Sugar", riskLevel: "Low", date: "2026-03-01", time: "11:00", type: "Routine Check", status: "Confirmed" },
-    { id: "A007", patientId: "PAT-001", patientName: "Arjun Sharma", disease: "Heart", riskLevel: "High", date: "2026-03-05", time: "10:00", type: "Echo follow-up", status: "Confirmed" },
-    { id: "A008", patientId: "PAT-002", patientName: "Meera Krishnamurthy", disease: "Sugar", riskLevel: "Medium", date: "2026-03-10", time: "15:00", type: "HbA1c Review", status: "Pending" },
-];
+interface Patient { id: string; name: string; disease: string; riskLevel: string; }
 
 const DAYS_IN_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 const diseaseColor: Record<string, { color: string; bg: string }> = {
-    Heart: { color: "#ff4d4f", bg: "#fff1f0" },
-    BP: { color: "#7c3aed", bg: "#f5f0ff" },
-    Sugar: { color: "#faad14", bg: "#fffbe6" },
-    Stress: { color: "#0052cc", bg: "#e6f0ff" },
+    Heart: { color: "#c92a2a", bg: "#ffe3e3" },
+    BP: { color: "#6741d9", bg: "#f3f0ff" },
+    Sugar: { color: "#e67700", bg: "#fff3bf" },
+    Stress: { color: "#0c8599", bg: "#c5f6fa" },
+};
+const DiseaseIcon: Record<string, React.ReactNode> = {
+    Heart: <Heart size={12} />, BP: <Activity size={12} />, Sugar: <Droplets size={12} />, Stress: <Brain size={12} />,
 };
 const statusConfig: Record<string, { color: string; bg: string; icon: React.ReactNode }> = {
-    Confirmed: { color: "#0052cc", bg: "#e6f0ff", icon: <CheckCircle size={12} /> },
-    Pending: { color: "#faad14", bg: "#fffbe6", icon: <AlertCircle size={12} /> },
-    Completed: { color: "#52c41a", bg: "#f6ffed", icon: <CheckCircle size={12} /> },
-    Cancelled: { color: "#ff4d4f", bg: "#fff1f0", icon: <XCircle size={12} /> },
+    Confirmed: { color: "#4c6ef5", bg: "#eef2ff", icon: <CheckCircle size={12} /> },
+    Pending: { color: "#e67700", bg: "#fff3bf", icon: <AlertCircle size={12} /> },
+    Completed: { color: "#2f9e44", bg: "#d3f9d8", icon: <CheckCircle size={12} /> },
+    Cancelled: { color: "#c92a2a", bg: "#ffe3e3", icon: <XCircle size={12} /> },
 };
 
-function getDaysInMonth(year: number, month: number) {
-    return new Date(year, month + 1, 0).getDate();
-}
-function getFirstDayOfMonth(year: number, month: number) {
-    return new Date(year, month, 1).getDay();
+function getDaysInMonth(y: number, m: number) { return new Date(y, m + 1, 0).getDate(); }
+function getFirstDay(y: number, m: number) { return new Date(y, m, 1).getDay(); }
+
+/* ─── Book Appointment Modal ─── */
+function BookModal({
+    patients, onClose, onBooked,
+}: { patients: Patient[]; onClose: () => void; onBooked: () => void }) {
+    const [patientId, setPatientId] = useState(patients[0]?.id ?? "");
+    const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+    const [time, setTime] = useState("10:00");
+    const [type, setType] = useState("Routine Check");
+    const [notes, setNotes] = useState("");
+    const [loading, setLoading] = useState(false);
+    const [err, setErr] = useState("");
+
+    const submit = async () => {
+        const pat = patients.find(p => p.id === patientId);
+        if (!pat) return;
+        setLoading(true); setErr("");
+        try {
+            const res = await fetch("/api/appointments", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    patientId, patientName: pat.name,
+                    disease: pat.disease, riskLevel: pat.riskLevel,
+                    date, time, type, notes,
+                    doctor: "Dr. Priya Nair",
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error);
+            onBooked();
+            onClose();
+        } catch (e: any) {
+            setErr(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ background: "rgba(15,23,42,0.55)", backdropFilter: "blur(4px)" }}
+            onClick={e => e.target === e.currentTarget && onClose()}>
+            <div className="w-full max-w-md rounded-3xl overflow-hidden shadow-2xl fade-in" style={{ background: "#fff" }}>
+                <div className="flex items-center justify-between px-6 py-4 page-header">
+                    <div>
+                        <p className="font-bold text-base" style={{ color: "#1a1f36" }}>Book Appointment</p>
+                        <p className="text-xs" style={{ color: "#8898aa" }}>Saved to database</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 rounded-xl hover:bg-slate-100"><X size={16} style={{ color: "#8898aa" }} /></button>
+                </div>
+                <div className="px-6 py-5 space-y-4">
+                    {err && (
+                        <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs"
+                            style={{ background: "#ffe3e3", color: "#c92a2a" }}>
+                            <AlertTriangle size={13} /> {err}
+                        </div>
+                    )}
+                    <div>
+                        <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Patient</label>
+                        <select value={patientId} onChange={e => setPatientId(e.target.value)}
+                            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                            style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }}>
+                            {patients.map(p => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
+                        </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Date</label>
+                            <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                                className="w-full px-3 py-3 rounded-xl border text-sm outline-none"
+                                style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }} />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Time</label>
+                            <input type="time" value={time} onChange={e => setTime(e.target.value)}
+                                className="w-full px-3 py-3 rounded-xl border text-sm outline-none"
+                                style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }} />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Type</label>
+                        <select value={type} onChange={e => setType(e.target.value)}
+                            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                            style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }}>
+                            {["Routine Check", "Follow-up", "Urgent Review", "Lab Results", "Counselling", "Post-procedure Review", "Cardiac Check", "Diabetes Review", "HbA1c Review", "Echo follow-up"].map(t => (
+                                <option key={t}>{t}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Notes (optional)</label>
+                        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+                            placeholder="Any special notes for this appointment..."
+                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none resize-none"
+                            style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }} />
+                    </div>
+                    <div className="flex gap-3 pt-1">
+                        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl border text-sm font-semibold"
+                            style={{ borderColor: "#e2e8f0", color: "#8898aa" }}>Cancel</button>
+                        <button onClick={submit} disabled={loading}
+                            className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white btn-primary flex items-center justify-center gap-2">
+                            {loading ? <Loader2 size={14} className="spin" /> : <CheckCircle size={14} />}
+                            Confirm Booking
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 }
 
+/* ─── Main Page ─── */
 export default function AppointmentsPage() {
-    const today = new Date("2026-02-27");
-    const [calYear, setCalYear] = useState(today.getFullYear());
-    const [calMonth, setCalMonth] = useState(today.getMonth());
-    const [selectedDate, setSelectedDate] = useState<string>("2026-02-27");
-    const [showBookModal, setShowBookModal] = useState(false);
+    const today = new Date().toISOString().split("T")[0];
+    const [calYear, setCalYear] = useState(new Date().getFullYear());
+    const [calMonth, setCalMonth] = useState(new Date().getMonth());
+    const [selectedDate, setSelectedDate] = useState(today);
+    const [showModal, setShowModal] = useState(false);
+    const [appointments, setAppts] = useState<Appointment[]>([]);
+    const [patients, setPatients] = useState<Patient[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [savingId, setSavingId] = useState<string | null>(null);
 
-    const daysInMonth = getDaysInMonth(calYear, calMonth);
-    const firstDay = getFirstDayOfMonth(calYear, calMonth);
-    const apptsByDate = mockAppointments.reduce<Record<string, Appointment[]>>((acc, a) => {
-        acc[a.date] = [...(acc[a.date] || []), a];
-        return acc;
-    }, {});
+    const fetchAppts = async () => {
+        setLoading(true);
+        try {
+            const [ar, pr] = await Promise.all([
+                fetch("/api/appointments", { cache: "no-store" }),
+                fetch("/api/patients", { cache: "no-store" }),
+            ]);
+            setAppts(await ar.json());
+            const pats = await pr.json();
+            setPatients(pats.map((p: any) => ({ id: p.patientId ?? p.id, name: p.name, disease: p.disease, riskLevel: p.riskLevel })));
+        } finally { setLoading(false); }
+    };
 
-    const selectedAppts = apptsByDate[selectedDate] || [];
+    useEffect(() => { fetchAppts(); }, []);
+
+    const changeStatus = async (appointmentId: string, status: string) => {
+        setSavingId(appointmentId);
+        await fetch(`/api/appointments/${appointmentId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status }),
+        });
+        await fetchAppts();
+        setSavingId(null);
+    };
 
     const prevMonth = () => { if (calMonth === 0) { setCalYear(y => y - 1); setCalMonth(11); } else setCalMonth(m => m - 1); };
     const nextMonth = () => { if (calMonth === 11) { setCalYear(y => y + 1); setCalMonth(0); } else setCalMonth(m => m + 1); };
 
+    const apptsByDate = appointments.reduce<Record<string, Appointment[]>>((acc, a) => {
+        acc[a.date] = [...(acc[a.date] || []), a]; return acc;
+    }, {});
+
+    const selectedAppts = apptsByDate[selectedDate] || [];
+    const upcoming = appointments.filter(a => a.date >= today && a.status !== "Cancelled");
+
     return (
         <div className="h-full overflow-y-auto">
             {/* Header */}
-            <div className="sticky top-0 z-20 px-6 py-4 flex items-center justify-between" style={{ background: "#fff", borderBottom: "1px solid #e2e8f0" }}>
+            <div className="sticky top-0 z-20 px-6 py-4 flex items-center justify-between page-header">
                 <div>
-                    <h1 className="text-xl font-bold" style={{ color: "#0a2540" }}>Appointments</h1>
-                    <p className="text-sm" style={{ color: "#64748b" }}>Schedule & manage patient appointments</p>
+                    <h1 className="text-xl font-bold" style={{ color: "#1a1f36" }}>Appointments</h1>
+                    <p className="text-sm" style={{ color: "#64748b" }}>
+                        {loading ? "Loading…" : `${appointments.length} total · ${upcoming.length} upcoming`}
+                    </p>
                 </div>
-                <button
-                    onClick={() => setShowBookModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white"
-                    style={{ background: "linear-gradient(135deg, #0052cc, #1a73e8)" }}
-                >
+                <button onClick={() => setShowModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white btn-primary">
                     <Plus size={14} /> Book Appointment
                 </button>
             </div>
 
-            <div className="p-6 grid grid-cols-3 gap-6">
-                {/* Calendar */}
-                <div className="col-span-2 rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-                    {/* Month nav */}
-                    <div className="flex items-center justify-between mb-5">
-                        <button onClick={prevMonth} className="p-2 rounded-xl hover:bg-gray-100 transition-colors"><ChevronLeft size={16} style={{ color: "#64748b" }} /></button>
-                        <h2 className="text-base font-bold" style={{ color: "#0a2540" }}>{MONTHS[calMonth]} {calYear}</h2>
-                        <button onClick={nextMonth} className="p-2 rounded-xl hover:bg-gray-100 transition-colors"><ChevronRight size={16} style={{ color: "#64748b" }} /></button>
-                    </div>
-
-                    {/* Day headers */}
-                    <div className="grid grid-cols-7 mb-2">
-                        {DAYS_IN_WEEK.map(d => (
-                            <p key={d} className="text-center text-xs font-semibold py-1" style={{ color: "#94a3b8" }}>{d}</p>
-                        ))}
-                    </div>
-
-                    {/* Calendar grid */}
-                    <div className="grid grid-cols-7 gap-1">
-                        {Array.from({ length: firstDay }).map((_, i) => <div key={`e${i}`} />)}
-                        {Array.from({ length: daysInMonth }).map((_, i) => {
-                            const day = i + 1;
-                            const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                            const dayAppts = apptsByDate[dateStr] || [];
-                            const isToday = dateStr === "2026-02-27";
-                            const isSelected = dateStr === selectedDate;
-                            const hasHigh = dayAppts.some(a => a.riskLevel === "High");
-
-                            return (
-                                <button
-                                    key={day}
-                                    onClick={() => setSelectedDate(dateStr)}
-                                    className="relative flex flex-col items-center py-2 rounded-xl transition-all"
-                                    style={{
-                                        background: isSelected ? "#0052cc" : isToday ? "#e6f0ff" : "transparent",
-                                        color: isSelected ? "#fff" : isToday ? "#0052cc" : "#0a2540",
-                                    }}
-                                >
-                                    <span className="text-sm font-medium">{day}</span>
-                                    {dayAppts.length > 0 && (
-                                        <div className="flex gap-0.5 mt-0.5">
-                                            {dayAppts.slice(0, 3).map((a, di) => (
-                                                <div key={di} className="w-1.5 h-1.5 rounded-full" style={{ background: isSelected ? "#fff" : a.riskLevel === "High" ? "#ff4d4f" : a.riskLevel === "Medium" ? "#faad14" : "#52c41a" }} />
-                                            ))}
-                                        </div>
-                                    )}
-                                </button>
-                            );
-                        })}
-                    </div>
-
-                    {/* Legend */}
-                    <div className="flex gap-4 mt-4 pt-4" style={{ borderTop: "1px solid #e2e8f0" }}>
-                        {[{ color: "#ff4d4f", label: "High Risk" }, { color: "#faad14", label: "Medium" }, { color: "#52c41a", label: "Low Risk" }].map(l => (
-                            <div key={l.label} className="flex items-center gap-1.5">
-                                <div className="w-2.5 h-2.5 rounded-full" style={{ background: l.color }} />
-                                <p className="text-xs" style={{ color: "#64748b" }}>{l.label}</p>
-                            </div>
-                        ))}
-                    </div>
+            {loading ? (
+                <div className="flex items-center justify-center py-20 gap-3" style={{ color: "#8898aa" }}>
+                    <Loader2 size={22} className="spin" /> <span className="text-sm">Loading appointments…</span>
                 </div>
-
-                {/* Appointment list for selected date */}
-                <div className="rounded-2xl border p-4 overflow-y-auto max-h-[480px]" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-                    <div className="flex items-center gap-2 mb-4">
-                        <Calendar size={14} style={{ color: "#0052cc" }} />
-                        <p className="text-sm font-bold" style={{ color: "#0a2540" }}>
-                            {new Date(selectedDate + "T00:00:00").toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
-                        </p>
+            ) : (
+                <div className="p-6 grid grid-cols-3 gap-6">
+                    {/* Calendar */}
+                    <div className="col-span-2 rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                        <div className="flex items-center justify-between mb-5">
+                            <button onClick={prevMonth} className="p-2 rounded-xl hover:bg-gray-100"><ChevronLeft size={16} style={{ color: "#64748b" }} /></button>
+                            <h2 className="text-base font-bold" style={{ color: "#1a1f36" }}>{MONTHS[calMonth]} {calYear}</h2>
+                            <button onClick={nextMonth} className="p-2 rounded-xl hover:bg-gray-100"><ChevronRight size={16} style={{ color: "#64748b" }} /></button>
+                        </div>
+                        <div className="grid grid-cols-7 mb-2">
+                            {DAYS_IN_WEEK.map(d => <p key={d} className="text-center text-xs font-semibold py-1" style={{ color: "#94a3b8" }}>{d}</p>)}
+                        </div>
+                        <div className="grid grid-cols-7 gap-1">
+                            {Array.from({ length: getFirstDay(calYear, calMonth) }).map((_, i) => <div key={`e${i}`} />)}
+                            {Array.from({ length: getDaysInMonth(calYear, calMonth) }).map((_, i) => {
+                                const day = i + 1;
+                                const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                                const dayAppts = apptsByDate[dateStr] || [];
+                                const isToday = dateStr === today;
+                                const isSelected = dateStr === selectedDate;
+                                return (
+                                    <button key={day} onClick={() => setSelectedDate(dateStr)}
+                                        className="relative flex flex-col items-center py-2 rounded-xl transition-all"
+                                        style={{
+                                            background: isSelected ? "#4c6ef5" : isToday ? "#eef2ff" : "transparent",
+                                            color: isSelected ? "#fff" : isToday ? "#4c6ef5" : "#1a1f36"
+                                        }}>
+                                        <span className="text-sm font-medium">{day}</span>
+                                        {dayAppts.length > 0 && (
+                                            <div className="flex gap-0.5 mt-0.5">
+                                                {dayAppts.slice(0, 3).map((a, di) => (
+                                                    <div key={di} className="w-1.5 h-1.5 rounded-full"
+                                                        style={{ background: isSelected ? "#fff" : a.riskLevel === "High" ? "#c92a2a" : a.riskLevel === "Medium" ? "#e67700" : "#2f9e44" }} />
+                                                ))}
+                                            </div>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="flex gap-4 mt-4 pt-4" style={{ borderTop: "1px solid #e2e8f0" }}>
+                            {[{ color: "#c92a2a", label: "High Risk" }, { color: "#e67700", label: "Medium" }, { color: "#2f9e44", label: "Low Risk" }].map(l => (
+                                <div key={l.label} className="flex items-center gap-1.5">
+                                    <div className="w-2.5 h-2.5 rounded-full" style={{ background: l.color }} />
+                                    <p className="text-xs" style={{ color: "#64748b" }}>{l.label}</p>
+                                </div>
+                            ))}
+                        </div>
                     </div>
 
-                    {selectedAppts.length === 0 ? (
-                        <div className="text-center py-12">
-                            <Calendar size={40} style={{ color: "#cbd5e0" }} className="mx-auto mb-2" />
-                            <p className="text-xs" style={{ color: "#94a3b8" }}>No appointments</p>
+                    {/* Appointments for selected date */}
+                    <div className="rounded-2xl border p-4 overflow-y-auto max-h-[480px]" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                        <div className="flex items-center gap-2 mb-4">
+                            <Calendar size={14} style={{ color: "#4c6ef5" }} />
+                            <p className="text-sm font-bold" style={{ color: "#1a1f36" }}>
+                                {new Date(selectedDate + "T00:00:00").toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+                            </p>
                         </div>
-                    ) : (
-                        <div className="space-y-3">
-                            {selectedAppts.map(a => {
-                                const dc = diseaseColor[a.disease];
+                        {selectedAppts.length === 0 ? (
+                            <div className="text-center py-12">
+                                <Calendar size={40} style={{ color: "#cbd5e0" }} className="mx-auto mb-2" />
+                                <p className="text-xs" style={{ color: "#94a3b8" }}>No appointments — click to add</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                {selectedAppts.map(a => {
+                                    const dc = diseaseColor[a.disease] ?? { color: "#64748b", bg: "#f1f5f9" };
+                                    const sc = statusConfig[a.status];
+                                    return (
+                                        <div key={a.appointmentId} className="rounded-xl p-3 border" style={{ borderColor: "#e2e8f0" }}>
+                                            <div className="flex items-start justify-between mb-2">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: dc.bg, color: dc.color }}>
+                                                        {a.patientName.split(" ").map(n => n[0]).join("").slice(0, 2)}
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs font-semibold" style={{ color: "#1a1f36" }}>{a.patientName}</p>
+                                                        <p className="text-xs" style={{ color: "#94a3b8" }}>{a.patientId}</p>
+                                                    </div>
+                                                </div>
+                                                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: sc.bg, color: sc.color }}>
+                                                    {sc.icon} {a.status}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between items-center">
+                                                <p className="text-xs" style={{ color: "#64748b" }}>{a.type}</p>
+                                                <div className="flex items-center gap-1 text-xs" style={{ color: "#4c6ef5" }}>
+                                                    <Clock size={10} />{a.time}
+                                                </div>
+                                            </div>
+                                            {/* Quick status buttons */}
+                                            {a.status !== "Completed" && a.status !== "Cancelled" && (
+                                                <div className="flex gap-2 mt-2">
+                                                    {a.status === "Pending" && (
+                                                        <button onClick={() => changeStatus(a.appointmentId, "Confirmed")}
+                                                            disabled={savingId === a.appointmentId}
+                                                            className="text-xs px-2 py-1 rounded-lg" style={{ background: "#eef2ff", color: "#4c6ef5" }}>
+                                                            Confirm
+                                                        </button>
+                                                    )}
+                                                    <button onClick={() => changeStatus(a.appointmentId, "Completed")}
+                                                        disabled={savingId === a.appointmentId}
+                                                        className="text-xs px-2 py-1 rounded-lg" style={{ background: "#d3f9d8", color: "#2f9e44" }}>
+                                                        Complete
+                                                    </button>
+                                                    <button onClick={() => changeStatus(a.appointmentId, "Cancelled")}
+                                                        disabled={savingId === a.appointmentId}
+                                                        className="text-xs px-2 py-1 rounded-lg" style={{ background: "#ffe3e3", color: "#c92a2a" }}>
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Upcoming list */}
+                    <div className="col-span-3">
+                        <h3 className="text-sm font-bold mb-3" style={{ color: "#1a1f36" }}>All Upcoming Appointments</h3>
+                        <div className="space-y-2">
+                            {upcoming.length === 0 ? (
+                                <p className="text-sm text-center py-8" style={{ color: "#94a3b8" }}>No upcoming appointments.</p>
+                            ) : upcoming.map(a => {
+                                const dc = diseaseColor[a.disease] ?? { color: "#64748b", bg: "#f1f5f9" };
                                 const sc = statusConfig[a.status];
                                 return (
-                                    <div key={a.id} className="rounded-xl p-3 border" style={{ borderColor: "#e2e8f0" }}>
-                                        <div className="flex items-start justify-between mb-2">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: dc.bg, color: dc.color }}>
-                                                    {a.patientName.split(" ").map(n => n[0]).join("").slice(0, 2)}
-                                                </div>
-                                                <div>
-                                                    <p className="text-xs font-semibold" style={{ color: "#0a2540" }}>{a.patientName}</p>
-                                                    <p className="text-xs" style={{ color: "#94a3b8" }}>{a.patientId}</p>
-                                                </div>
-                                            </div>
-                                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: sc.bg, color: sc.color }}>
-                                                {sc.icon} {a.status}
-                                            </span>
+                                    <div key={a.appointmentId} className="flex items-center gap-4 px-4 py-3 rounded-xl border"
+                                        style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                                        <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm" style={{ background: dc.bg, color: dc.color }}>
+                                            {a.patientName.split(" ").map(n => n[0]).join("").slice(0, 2)}
                                         </div>
-                                        <div className="flex justify-between items-center">
-                                            <p className="text-xs" style={{ color: "#64748b" }}>{a.type}</p>
-                                            <div className="flex items-center gap-1 text-xs" style={{ color: "#0052cc" }}>
-                                                <Clock size={10} />{a.time}
-                                            </div>
+                                        <div className="flex-1">
+                                            <p className="text-sm font-semibold" style={{ color: "#1a1f36" }}>{a.patientName}</p>
+                                            <p className="text-xs" style={{ color: "#64748b" }}>{a.type} · {a.patientId}</p>
                                         </div>
+                                        <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-semibold" style={{ background: dc.bg, color: dc.color }}>
+                                            {DiseaseIcon[a.disease]} {a.disease}
+                                        </span>
+                                        <div className="text-right">
+                                            <p className="text-xs font-semibold" style={{ color: "#1a1f36" }}>
+                                                {new Date(a.date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" })} · {a.time}
+                                            </p>
+                                        </div>
+                                        <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-semibold" style={{ background: sc.bg, color: sc.color }}>
+                                            {sc.icon} {a.status}
+                                        </span>
+                                        {a.status !== "Completed" && a.status !== "Cancelled" && (
+                                            <button onClick={() => changeStatus(a.appointmentId, "Completed")}
+                                                disabled={savingId === a.appointmentId}
+                                                className="text-xs px-2 py-1 rounded-lg" style={{ background: "#d3f9d8", color: "#2f9e44" }}>
+                                                {savingId === a.appointmentId ? "…" : "Done"}
+                                            </button>
+                                        )}
                                     </div>
                                 );
                             })}
                         </div>
-                    )}
-                </div>
-            </div>
-
-            {/* Today's full schedule */}
-            <div className="px-6 pb-6">
-                <h3 className="text-sm font-bold mb-3" style={{ color: "#0a2540" }}>All Upcoming Appointments</h3>
-                <div className="space-y-2">
-                    {mockAppointments.filter(a => a.date >= "2026-02-27").map(a => {
-                        const dc = diseaseColor[a.disease];
-                        const sc = statusConfig[a.status];
-                        return (
-                            <div key={a.id} className="flex items-center gap-4 px-4 py-3 rounded-xl border" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-                                <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm" style={{ background: dc.bg, color: dc.color }}>
-                                    {a.patientName.split(" ").map(n => n[0]).join("").slice(0, 2)}
-                                </div>
-                                <div className="flex-1">
-                                    <p className="text-sm font-semibold" style={{ color: "#0a2540" }}>{a.patientName}</p>
-                                    <p className="text-xs" style={{ color: "#64748b" }}>{a.type} · {a.patientId}</p>
-                                </div>
-                                <span className="text-xs px-2.5 py-1 rounded-full font-semibold" style={{ background: dc.bg, color: dc.color }}>{a.disease}</span>
-                                <div className="text-right">
-                                    <p className="text-xs font-semibold" style={{ color: "#0a2540" }}>{new Date(a.date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" })} · {a.time}</p>
-                                </div>
-                                <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-semibold" style={{ background: sc.bg, color: sc.color }}>
-                                    {sc.icon} {a.status}
-                                </span>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-
-            {/* Book Appointment Modal */}
-            {showBookModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <div className="absolute inset-0" style={{ background: "rgba(10,37,64,0.6)", backdropFilter: "blur(4px)" }} onClick={() => setShowBookModal(false)} />
-                    <div className="relative rounded-2xl p-6 w-full max-w-md shadow-2xl fade-in" style={{ background: "#fff" }}>
-                        <div className="flex items-center justify-between mb-5">
-                            <h3 className="text-lg font-bold" style={{ color: "#0a2540" }}>Book Appointment</h3>
-                            <button onClick={() => setShowBookModal(false)}><X size={18} style={{ color: "#64748b" }} /></button>
-                        </div>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Patient</label>
-                                <select className="w-full px-4 py-3 rounded-xl border text-sm outline-none" style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }}>
-                                    {mockPatients.map(p => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
-                                </select>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Date</label>
-                                    <input type="date" className="w-full px-4 py-3 rounded-xl border text-sm outline-none" style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }} defaultValue="2026-03-01" />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Time</label>
-                                    <input type="time" className="w-full px-4 py-3 rounded-xl border text-sm outline-none" style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }} defaultValue="10:00" />
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-semibold mb-1.5" style={{ color: "#374151" }}>Type</label>
-                                <select className="w-full px-4 py-3 rounded-xl border text-sm outline-none" style={{ borderColor: "#e2e8f0", background: "#f8fafc", color: "#0a2540" }}>
-                                    {["Routine Check", "Follow-up", "Urgent Review", "Lab Results", "Counselling", "Post-procedure Review"].map(t => <option key={t}>{t}</option>)}
-                                </select>
-                            </div>
-                        </div>
-                        <div className="flex gap-3 mt-6">
-                            <button onClick={() => setShowBookModal(false)} className="flex-1 py-3 rounded-xl border text-sm font-semibold" style={{ borderColor: "#e2e8f0", color: "#64748b" }}>Cancel</button>
-                            <button onClick={() => setShowBookModal(false)} className="flex-1 py-3 rounded-xl text-sm font-semibold text-white" style={{ background: "linear-gradient(135deg, #0052cc, #1a73e8)" }}>Confirm Booking</button>
-                        </div>
                     </div>
                 </div>
             )}
+
+            {showModal && <BookModal patients={patients} onClose={() => setShowModal(false)} onBooked={fetchAppts} />}
         </div>
     );
 }

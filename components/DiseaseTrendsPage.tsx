@@ -1,46 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
     AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-    Tooltip, ResponsiveContainer, Legend,
+    Tooltip, ResponsiveContainer, Cell, PieChart, Pie,
 } from "recharts";
-import { growthTrendData, diseasePrevalenceData, regionOptions } from "@/lib/mockData";
-import { TrendingUp, ChevronDown } from "lucide-react";
+import { TrendingUp, ChevronDown, Loader2, Info } from "lucide-react";
 
-const COLORS = { Heart: "#ff4d4f", BP: "#7c3aed", Sugar: "#faad14", Stress: "#0052cc" };
+const COLORS: Record<string, string> = { Heart: "#ff4d4f", BP: "#7c3aed", Sugar: "#faad14", Stress: "#0052cc" };
 const DISEASE_KEYS = ["Heart", "BP", "Sugar", "Stress"] as const;
 
-// Generate forecast from existing data
-const forecastData = [
-    ...growthTrendData,
-    { month: "Mar '26", Heart: 18200, BP: 31800, Sugar: 42100, Stress: 13900 },
-    { month: "Apr '26", Heart: 19100, BP: 33200, Sugar: 44000, Stress: 14400 },
-];
-
-const heatmapRegions = ["Bengaluru", "Chennai", "Mumbai", "Hyderabad", "Delhi", "Ahmedabad"];
-const heatmapData: Record<string, Record<string, number>> = {
-    Bengaluru: { Heart: 4200, BP: 6800, Sugar: 7200, Stress: 3100 },
-    Chennai: { Heart: 5100, BP: 7400, Sugar: 8900, Stress: 2800 },
-    Mumbai: { Heart: 6300, BP: 8100, Sugar: 9500, Stress: 4200 },
-    Hyderabad: { Heart: 3800, BP: 5900, Sugar: 7100, Stress: 2500 },
-    Delhi: { Heart: 7200, BP: 9300, Sugar: 10200, Stress: 5100 },
-    Ahmedabad: { Heart: 3200, BP: 5100, Sugar: 6300, Stress: 1900 },
-};
-
-function heatColor(val: number, disease: string): string {
-    const maxes: Record<string, number> = { Heart: 7200, BP: 9300, Sugar: 10200, Stress: 5100 };
-    const pct = val / maxes[disease];
-    const colors: Record<string, [string, string]> = {
-        Heart: ["#fff1f0", "#ff4d4f"],
-        BP: ["#f5f0ff", "#7c3aed"],
-        Sugar: ["#fffbe6", "#faad14"],
-        Stress: ["#e6f0ff", "#0052cc"],
-    };
-    const [light, dark] = colors[disease];
-    // Interpolate hex is complex; use opacity trick with dark colour
-    const opacity = 0.15 + pct * 0.85;
-    return `${dark}${Math.round(opacity * 255).toString(16).padStart(2, "0")}`;
+interface RegionalData {
+    total: number;
+    byDisease: { _id: string; count: number }[];
+    byRisk: { _id: string; count: number }[];
+    byState: { _id: string; count: number }[];
+    byCity: { _id: string; count: number }[];
+    avgMetrics: { avgHR: number; avgSBP: number; avgChol: number; avgHba1c: number; avgBMI: number };
+    byGender: { _id: string; count: number }[];
+    ageGroups: { _id: number; count: number }[];
+    diseaseRisk: { _id: { disease: string; risk: string }; count: number }[];
+    filters: { states: string[]; cities: string[]; diseases: string[]; riskLevels: string[] };
 }
 
 function CustomTooltip({ active, payload, label }: any) {
@@ -50,9 +30,9 @@ function CustomTooltip({ active, payload, label }: any) {
             <p className="font-bold mb-2" style={{ color: "#0a2540" }}>{label}</p>
             {payload.map((e: any) => (
                 <div key={e.name} className="flex items-center gap-2 mb-1">
-                    <div className="w-2 h-2 rounded-full" style={{ background: e.color }} />
-                    <span style={{ color: "#64748b" }}>{e.name}:</span>
-                    <span className="font-semibold">{e.value.toLocaleString()}</span>
+                    <div className="w-2 h-2 rounded-full" style={{ background: e.color || e.fill }} />
+                    <span style={{ color: "#64748b" }}>{e.name ?? e.dataKey}:</span>
+                    <span className="font-semibold" style={{ color: "#0a2540" }}>{(e.value || 0).toLocaleString()}</span>
                 </div>
             ))}
         </div>
@@ -61,16 +41,70 @@ function CustomTooltip({ active, payload, label }: any) {
 
 const TIME_RANGES = ["7d", "30d", "90d", "1yr"] as const;
 
+function heatColor(val: number, maxVal: number, disease: string): string {
+    const pct = maxVal > 0 ? val / maxVal : 0;
+    const opacity = 0.15 + pct * 0.85;
+    const hex = Math.round(opacity * 255).toString(16).padStart(2, "0");
+    return `${COLORS[disease] ?? "#94a3b8"}${hex}`;
+}
+
 export default function DiseaseTrendsPage() {
     const [range, setRange] = useState<typeof TIME_RANGES[number]>("1yr");
-    const [disease, setDisease] = useState("All");
-    const [state, setState] = useState("All");
+    const [state, setState] = useState("");
+    const [disease, setDisease] = useState("");
+    const [riskLevel, setRisk] = useState("");
     const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set(DISEASE_KEYS));
+    const [data, setData] = useState<RegionalData | null>(null);
+    const [loading, setLoading] = useState(true);
 
     const toggleKey = (k: string) =>
         setActiveKeys(prev => { const s = new Set(prev); s.has(k) ? s.delete(k) : s.add(k); return s; });
 
-    const chartData = range === "7d" ? forecastData.slice(-2) : range === "30d" ? forecastData.slice(-3) : range === "90d" ? forecastData.slice(-5) : forecastData;
+    const fetchData = useCallback(async () => {
+        setLoading(true);
+        const params = new URLSearchParams();
+        if (state) params.set("state", state);
+        if (disease) params.set("disease", disease);
+        if (riskLevel) params.set("riskLevel", riskLevel);
+        try {
+            const res = await fetch(`/api/regional?${params}`, { cache: "no-store" });
+            setData(await res.json());
+        } finally { setLoading(false); }
+    }, [state, disease, riskLevel]);
+
+    useEffect(() => { fetchData(); }, [fetchData]);
+
+    // Build area chart data from byState (using top states by disease as proxy timeline)
+    // Since our data doesn't have month-by-month history, we'll use byState as x-axis grouped by disease
+    const diseaseBreakdown = data?.byDisease?.map(d => ({
+        name: d._id,
+        count: d.count,
+        color: COLORS[d._id] ?? "#94a3b8",
+        pct: data.total > 0 ? ((d.count / data.total) * 100).toFixed(1) : "0",
+    })) ?? [];
+
+    // Disease × Risk cross-tab
+    const diseaseRiskMatrix: Record<string, Record<string, number>> = {};
+    data?.diseaseRisk?.forEach(dr => {
+        if (!diseaseRiskMatrix[dr._id.disease]) diseaseRiskMatrix[dr._id.disease] = {};
+        diseaseRiskMatrix[dr._id.disease][dr._id.risk] = dr.count;
+    });
+
+    // Top cities heatmap
+    const topCities = data?.byCity?.slice(0, 6).map(c => c._id) ?? [];
+    const cityDiseaseData: Record<string, Record<string, number>> = {};
+    // Build city-disease data from diseaseRisk cross-tab and city data
+    topCities.forEach(city => { cityDiseaseData[city] = {}; });
+
+    // Age distribution
+    const ageData = data?.ageGroups?.map(a => ({
+        age: a._id === 0 ? "<18" : a._id === 18 ? "18-34" : a._id === 35 ? "35-49" : a._id === 50 ? "50-64" : a._id === 65 ? "65-79" : "80+",
+        count: a.count,
+    })) ?? [];
+
+    // Gender split
+    const genderData = data?.byGender?.map(g => ({ name: g._id, value: g.count })) ?? [];
+    const GENDER_COLORS = ["#4c6ef5", "#e64980"];
 
     return (
         <div className="h-full overflow-y-auto">
@@ -78,164 +112,260 @@ export default function DiseaseTrendsPage() {
             <div className="sticky top-0 z-20 px-6 py-4 flex items-center justify-between" style={{ background: "#fff", borderBottom: "1px solid #e2e8f0" }}>
                 <div>
                     <h1 className="text-xl font-bold" style={{ color: "#0a2540" }}>Disease Trends</h1>
-                    <p className="text-sm" style={{ color: "#64748b" }}>National chronic disease growth analysis & regional breakdown</p>
+                    <p className="text-sm" style={{ color: "#64748b" }}>National chronic disease analysis · {(data?.total ?? 0).toLocaleString("en-IN")} patients · Live from MongoDB</p>
                 </div>
-                <div className="flex gap-2 items-center">
-                    {/* Time range pills */}
+                <div className="flex gap-2 items-center flex-wrap">
+                    {/* Time range */}
                     {TIME_RANGES.map(r => (
-                        <button
-                            key={r}
-                            onClick={() => setRange(r)}
+                        <button key={r} onClick={() => setRange(r)}
                             className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-                            style={{
-                                background: range === r ? "#0052cc" : "#f1f5f9",
-                                color: range === r ? "#fff" : "#64748b",
-                            }}
-                        >
+                            style={{ background: range === r ? "#0052cc" : "#f1f5f9", color: range === r ? "#fff" : "#64748b" }}>
                             {r}
                         </button>
                     ))}
+
                     {/* State filter */}
                     <div className="relative ml-2">
-                        <select
-                            value={state}
-                            onChange={e => setState(e.target.value)}
+                        <select value={state} onChange={e => setState(e.target.value)}
                             className="appearance-none pl-3 pr-8 py-1.5 rounded-xl border text-sm font-medium cursor-pointer outline-none"
-                            style={{ borderColor: "#b3d1ff", background: "#e6f0ff", color: "#0052cc" }}
-                        >
-                            <option value="All">All States</option>
-                            {regionOptions.states.map(s => <option key={s}>{s}</option>)}
+                            style={{ borderColor: "#b3d1ff", background: "#e6f0ff", color: "#0052cc" }}>
+                            <option value="">All States</option>
+                            {(data?.filters?.states ?? []).map(s => <option key={s}>{s}</option>)}
                         </select>
                         <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "#0052cc" }} />
                     </div>
+
+                    {/* Disease filter */}
+                    <div className="relative">
+                        <select value={disease} onChange={e => setDisease(e.target.value)}
+                            className="appearance-none pl-3 pr-8 py-1.5 rounded-xl border text-sm font-medium cursor-pointer outline-none"
+                            style={{ borderColor: "#b3d1ff", background: "#e6f0ff", color: "#0052cc" }}>
+                            <option value="">All Diseases</option>
+                            {["Heart", "BP", "Sugar", "Stress"].map(d => <option key={d}>{d}</option>)}
+                        </select>
+                        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "#0052cc" }} />
+                    </div>
+
+                    {/* Risk filter */}
+                    <div className="relative">
+                        <select value={riskLevel} onChange={e => setRisk(e.target.value)}
+                            className="appearance-none pl-3 pr-8 py-1.5 rounded-xl border text-sm font-medium cursor-pointer outline-none"
+                            style={{ borderColor: "#b3d1ff", background: "#e6f0ff", color: "#0052cc" }}>
+                            <option value="">All Risk Levels</option>
+                            {["High", "Medium", "Low"].map(r => <option key={r}>{r}</option>)}
+                        </select>
+                        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "#0052cc" }} />
+                    </div>
+
+                    {(state || disease || riskLevel) && (
+                        <button onClick={() => { setState(""); setDisease(""); setRisk(""); }}
+                            className="px-3 py-1.5 text-xs rounded-xl font-semibold"
+                            style={{ background: "#fff1f0", color: "#ff4d4f" }}>
+                            Clear
+                        </button>
+                    )}
                 </div>
             </div>
 
-            <div className="p-6 space-y-6">
-                {/* Area chart — national trend */}
-                <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-                    <div className="flex items-center justify-between mb-4">
-                        <div>
-                            <h3 className="font-bold" style={{ color: "#0a2540" }}>National Chronic Disease Growth</h3>
-                            <p className="text-xs" style={{ color: "#94a3b8" }}>Aggregate case count across all monitored regions</p>
-                        </div>
-                        {/* Legend toggles */}
-                        <div className="flex gap-3">
-                            {DISEASE_KEYS.map(k => (
-                                <button
-                                    key={k}
-                                    onClick={() => toggleKey(k)}
-                                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all"
-                                    style={{
-                                        background: activeKeys.has(k) ? COLORS[k] + "18" : "#f8fafc",
-                                        color: activeKeys.has(k) ? COLORS[k] : "#94a3b8",
-                                        borderColor: activeKeys.has(k) ? COLORS[k] + "40" : "#e2e8f0",
-                                        opacity: activeKeys.has(k) ? 1 : 0.5,
-                                    }}
-                                >
-                                    <div className="w-2 h-2 rounded-full" style={{ background: activeKeys.has(k) ? COLORS[k] : "#cbd5e0" }} />
-                                    {k}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                    <ResponsiveContainer width="100%" height={280}>
-                        <AreaChart data={chartData}>
-                            <defs>
-                                {DISEASE_KEYS.map(k => (
-                                    <linearGradient key={k} id={`grad_${k}`} x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor={COLORS[k]} stopOpacity={0.25} />
-                                        <stop offset="95%" stopColor={COLORS[k]} stopOpacity={0.02} />
-                                    </linearGradient>
-                                ))}
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                            <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
-                            <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                            <Tooltip content={<CustomTooltip />} />
-                            {DISEASE_KEYS.filter(k => activeKeys.has(k)).map(k => (
-                                <Area key={k} type="monotone" dataKey={k} stroke={COLORS[k]} strokeWidth={2} fill={`url(#grad_${k})`} dot={{ r: 3, fill: COLORS[k] }} />
-                            ))}
-                        </AreaChart>
-                    </ResponsiveContainer>
+            {loading ? (
+                <div className="flex items-center justify-center py-20 gap-3" style={{ color: "#8898aa" }}>
+                    <Loader2 size={22} className="spin" /> <span className="text-sm">Loading trend data…</span>
                 </div>
-
-                {/* Two column charts */}
-                <div className="grid grid-cols-2 gap-6">
-                    {/* Bar — regional prevalence */}
-                    <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-                        <h3 className="font-bold mb-1" style={{ color: "#0a2540" }}>Disease Prevalence by Region</h3>
-                        <p className="text-xs mb-4" style={{ color: "#94a3b8" }}>Cases per monitored region</p>
-                        <ResponsiveContainer width="100%" height={240}>
-                            <BarChart data={diseasePrevalenceData} barCategoryGap="25%">
-                                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                                <XAxis dataKey="region" tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
-                                <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                                <Tooltip content={<CustomTooltip />} />
-                                {DISEASE_KEYS.filter(k => activeKeys.has(k)).map(k => (
-                                    <Bar key={k} dataKey={k} fill={COLORS[k]} radius={[3, 3, 0, 0]} />
-                                ))}
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </div>
-
-                    {/* Heatmap */}
-                    <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-                        <h3 className="font-bold mb-1" style={{ color: "#0a2540" }}>Regional Heatmap</h3>
-                        <p className="text-xs mb-4" style={{ color: "#94a3b8" }}>Disease intensity per region — darker = higher load</p>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-xs">
-                                <thead>
-                                    <tr>
-                                        <th className="text-left py-1.5 pr-3 font-semibold" style={{ color: "#94a3b8" }}>Region</th>
-                                        {DISEASE_KEYS.map(k => (
-                                            <th key={k} className="text-center px-2 py-1.5 font-semibold" style={{ color: COLORS[k] }}>{k}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {heatmapRegions.map(r => (
-                                        <tr key={r}>
-                                            <td className="py-2 pr-3 font-medium" style={{ color: "#64748b" }}>{r}</td>
-                                            {DISEASE_KEYS.map(k => (
-                                                <td key={k} className="text-center px-2 py-1.5">
-                                                    <div
-                                                        className="rounded-lg px-2 py-1 font-semibold text-center"
-                                                        style={{ background: heatColor(heatmapData[r][k], k), color: COLORS[k] }}
-                                                    >
-                                                        {(heatmapData[r][k] / 1000).toFixed(1)}k
-                                                    </div>
-                                                </td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Growth rate cards */}
-                <div className="grid grid-cols-4 gap-4">
-                    {DISEASE_KEYS.map(k => {
-                        const latest = forecastData[forecastData.length - 1][k];
-                        const prev = forecastData[forecastData.length - 3][k];
-                        const growth = (((latest - prev) / prev) * 100).toFixed(1);
-                        return (
-                            <div key={k} className="rounded-2xl border p-4" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
-                                <div className="flex items-center justify-between mb-2">
-                                    <p className="text-xs font-semibold" style={{ color: "#64748b" }}>{k === "BP" ? "Hypertension" : k === "Sugar" ? "Diabetes" : k}</p>
-                                    <TrendingUp size={14} style={{ color: COLORS[k] }} />
+            ) : (
+                <div className="p-6 space-y-6">
+                    {/* Summary stat row */}
+                    <div className="grid grid-cols-4 gap-4">
+                        {diseaseBreakdown.map(d => (
+                            <div key={d.name} className="rounded-2xl p-4 border" style={{ background: d.color + "10", borderColor: d.color + "40" }}>
+                                <div className="flex justify-between items-center mb-2">
+                                    <p className="text-xs font-semibold" style={{ color: "#64748b" }}>
+                                        {d.name === "BP" ? "Hypertension" : d.name === "Sugar" ? "Diabetes" : d.name}
+                                    </p>
+                                    <TrendingUp size={13} style={{ color: d.color }} />
                                 </div>
-                                <p className="text-2xl font-black" style={{ color: COLORS[k] }}>{(latest / 1000).toFixed(1)}k</p>
-                                <p className="text-xs mt-1" style={{ color: "#94a3b8" }}>
-                                    <span className="font-semibold" style={{ color: "#52c41a" }}>+{growth}%</span> vs 3 months ago
-                                </p>
+                                <p className="text-2xl font-black" style={{ color: d.color }}>{d.count.toLocaleString("en-IN")}</p>
+                                <div className="flex items-center justify-between mt-1">
+                                    <p className="text-xs" style={{ color: "#94a3b8" }}>{d.pct}% of total</p>
+                                </div>
+                                <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: d.color + "20" }}>
+                                    <div className="h-full rounded-full" style={{ width: `${d.pct}%`, background: d.color }} />
+                                </div>
                             </div>
-                        );
-                    })}
+                        ))}
+                    </div>
+
+                    {/* Main charts */}
+                    <div className="grid grid-cols-2 gap-6">
+                        {/* Disease bar chart — top states with disease distribution */}
+                        <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                            <div className="flex items-center justify-between mb-4">
+                                <div>
+                                    <h3 className="font-bold" style={{ color: "#0a2540" }}>Cases by Disease Category</h3>
+                                    <p className="text-xs" style={{ color: "#94a3b8" }}>Filtered: {state || "All states"} · {riskLevel || "All risk levels"}</p>
+                                </div>
+                                {/* Toggle keys */}
+                                <div className="flex gap-2 flex-wrap">
+                                    {DISEASE_KEYS.map(k => (
+                                        <button key={k} onClick={() => toggleKey(k)}
+                                            className="flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-semibold border"
+                                            style={{
+                                                background: activeKeys.has(k) ? COLORS[k] + "18" : "#f8fafc",
+                                                color: activeKeys.has(k) ? COLORS[k] : "#94a3b8",
+                                                borderColor: activeKeys.has(k) ? COLORS[k] + "40" : "#e2e8f0",
+                                                opacity: activeKeys.has(k) ? 1 : 0.5
+                                            }}>
+                                            <div className="w-1.5 h-1.5 rounded-full" style={{ background: activeKeys.has(k) ? COLORS[k] : "#cbd5e0" }} />
+                                            {k}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <ResponsiveContainer width="100%" height={260}>
+                                <BarChart data={diseaseBreakdown.filter(d => activeKeys.has(d.name))} barCategoryGap="30%">
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                                    <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                                    <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                                    <Tooltip content={<CustomTooltip />} />
+                                    <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                                        {diseaseBreakdown.filter(d => activeKeys.has(d.name)).map((d, i) => (
+                                            <Cell key={i} fill={d.color} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+
+                        {/* Disease × Risk cross-tab */}
+                        <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                            <h3 className="font-bold mb-1" style={{ color: "#0a2540" }}>Disease × Risk Cross-Tab</h3>
+                            <p className="text-xs mb-4" style={{ color: "#94a3b8" }}>Patient count per disease + risk level combination</p>
+                            <div className="overflow-hidden rounded-xl border" style={{ borderColor: "#e2e8f0" }}>
+                                <table className="w-full text-sm">
+                                    <thead style={{ background: "#f8fafc" }}>
+                                        <tr>
+                                            <th className="px-4 py-2.5 text-left text-xs font-semibold" style={{ color: "#64748b" }}>Disease</th>
+                                            {["High", "Medium", "Low"].map(r => (
+                                                <th key={r} className="px-4 py-2.5 text-center text-xs font-semibold"
+                                                    style={{ color: r === "High" ? "#ff4d4f" : r === "Medium" ? "#faad14" : "#52c41a" }}>{r}</th>
+                                            ))}
+                                            <th className="px-4 py-2.5 text-right text-xs font-semibold" style={{ color: "#64748b" }}>Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {Object.entries(diseaseRiskMatrix).map(([dis, riskMap], i) => {
+                                            const rowTotal = Object.values(riskMap).reduce((a, b) => a + b, 0);
+                                            return (
+                                                <tr key={dis} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc", borderTop: "1px solid #e2e8f0" }}>
+                                                    <td className="px-4 py-3">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="w-2.5 h-2.5 rounded-full" style={{ background: COLORS[dis] ?? "#94a3b8" }} />
+                                                            <span className="font-semibold" style={{ color: COLORS[dis] ?? "#0a2540" }}>{dis}</span>
+                                                        </div>
+                                                    </td>
+                                                    {["High", "Medium", "Low"].map(r => (
+                                                        <td key={r} className="px-4 py-3 text-center font-semibold" style={{ color: r === "High" ? "#ff4d4f" : r === "Medium" ? "#faad14" : "#52c41a" }}>
+                                                            {(riskMap[r] ?? 0).toLocaleString("en-IN")}
+                                                        </td>
+                                                    ))}
+                                                    <td className="px-4 py-3 text-right font-bold" style={{ color: "#0a2540" }}>{rowTotal.toLocaleString("en-IN")}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Second row: Age distribution + Gender split + Top States */}
+                    <div className="grid grid-cols-3 gap-6">
+                        {/* Age distribution */}
+                        <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                            <h3 className="font-bold text-sm mb-4" style={{ color: "#0a2540" }}>Age Distribution</h3>
+                            <ResponsiveContainer width="100%" height={180}>
+                                <BarChart data={ageData} barCategoryGap="20%">
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                                    <XAxis dataKey="age" tick={{ fontSize: 10, fill: "#64748b" }} axisLine={false} tickLine={false} />
+                                    <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
+                                    <Tooltip />
+                                    <Bar dataKey="count" fill="#4c6ef5" radius={[4, 4, 0, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+
+                        {/* Gender Pie */}
+                        <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                            <h3 className="font-bold text-sm mb-4" style={{ color: "#0a2540" }}>Gender Split</h3>
+                            <div className="flex items-center gap-4">
+                                <ResponsiveContainer width={140} height={140}>
+                                    <PieChart>
+                                        <Pie data={genderData} dataKey="value" cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={4}>
+                                            {genderData.map((_, i) => <Cell key={i} fill={GENDER_COLORS[i % 2]} />)}
+                                        </Pie>
+                                        <Tooltip />
+                                    </PieChart>
+                                </ResponsiveContainer>
+                                <div className="space-y-2">
+                                    {genderData.map((g, i) => (
+                                        <div key={g.name} className="flex items-center gap-2">
+                                            <div className="w-3 h-3 rounded-full" style={{ background: GENDER_COLORS[i % 2] }} />
+                                            <span className="text-sm" style={{ color: "#64748b" }}>{g.name}</span>
+                                            <span className="font-bold text-sm ml-1" style={{ color: GENDER_COLORS[i % 2] }}>{g.value.toLocaleString()}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Top States */}
+                        <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                            <h3 className="font-bold text-sm mb-4" style={{ color: "#0a2540" }}>Top States</h3>
+                            <div className="space-y-2.5">
+                                {(data?.byState?.slice(0, 6) ?? []).map((s, i) => {
+                                    const pct = data ? ((s.count / data.total) * 100).toFixed(1) : 0;
+                                    return (
+                                        <div key={s._id}>
+                                            <div className="flex justify-between mb-1">
+                                                <span className="text-xs font-medium" style={{ color: "#374151" }}>{s._id}</span>
+                                                <span className="text-xs font-bold" style={{ color: "#4c6ef5" }}>{s.count.toLocaleString("en-IN")} ({pct}%)</span>
+                                            </div>
+                                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "#e2e8f0" }}>
+                                                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: "#4c6ef5" }} />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Avg health metrics */}
+                    {data?.avgMetrics && (
+                        <div className="rounded-2xl border p-5" style={{ background: "#fff", borderColor: "#e2e8f0" }}>
+                            <div className="flex items-center gap-2 mb-4">
+                                <Info size={14} style={{ color: "#0052cc" }} />
+                                <h3 className="font-bold text-sm" style={{ color: "#0a2540" }}>Average Health Metrics  <span className="text-xs font-normal" style={{ color: "#94a3b8" }}>for filtered cohort</span></h3>
+                            </div>
+                            <div className="grid grid-cols-5 gap-4">
+                                {[
+                                    { label: "Avg Heart Rate", val: data.avgMetrics.avgHR?.toFixed(0), unit: "bpm", warnVal: 90, warnColor: "#ff4d4f" },
+                                    { label: "Avg Systolic BP", val: data.avgMetrics.avgSBP?.toFixed(0), unit: "mmHg", warnVal: 130, warnColor: "#ff4d4f" },
+                                    { label: "Avg Cholesterol", val: data.avgMetrics.avgChol?.toFixed(0), unit: "mg/dL", warnVal: 200, warnColor: "#faad14" },
+                                    { label: "Avg HbA1c", val: data.avgMetrics.avgHba1c?.toFixed(1), unit: "%", warnVal: 6.5, warnColor: "#faad14" },
+                                    { label: "Avg BMI", val: data.avgMetrics.avgBMI?.toFixed(1), unit: "", warnVal: 25, warnColor: "#e67700" },
+                                ].map(m => (
+                                    <div key={m.label} className="text-center">
+                                        <p className="text-xs mb-1" style={{ color: "#94a3b8" }}>{m.label}</p>
+                                        <p className="text-2xl font-black" style={{ color: parseFloat(m.val ?? "0") > m.warnVal ? m.warnColor : "#0052cc" }}>
+                                            {m.val}<span className="text-xs font-normal ml-0.5" style={{ color: "#94a3b8" }}>{m.unit}</span>
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
-            </div>
+            )}
         </div>
     );
 }

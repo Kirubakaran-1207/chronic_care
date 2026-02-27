@@ -6,8 +6,50 @@ import {
     X, FileText, Activity, AlertTriangle, TrendingUp, TrendingDown,
     Minus, Clock, User, Phone, Calendar, ChevronDown, ChevronUp,
     Sparkles, Send, Bot, Loader2, RefreshCw, MessageSquare,
-    Upload, CheckCircle, FileUp, Trash2,
+    Upload, CheckCircle, FileUp, Trash2, Download,
 } from "lucide-react";
+
+// ── PDF Download helper ──────────────────────────────────────────────────────
+function downloadMedicalReportPDF(patient: Patient, aiSummary: string) {
+    const metrics = patient.clinicalMetrics.map(m =>
+        `<tr><td style="padding:4px 8px;color:#525f7f">${m.label}:</td><td style="padding:4px 8px;font-weight:600;color:${m.status === 'critical' ? '#c92a2a' : m.status === 'warning' ? '#e67700' : '#2f9e44'}">${m.value} ${m.unit}</td></tr>`
+    ).join("");
+    const actions = patient.suggestedActions.map((a, i) =>
+        `<div style="margin:4px 0;padding:6px 10px;background:#f4f6fb;border-radius:8px;font-size:12px">${i + 1}. ${a}</div>`
+    ).join("");
+    const html = `<!DOCTYPE html><html><head><title>Medical Report - ${patient.name}</title>
+<style>body{font-family:Arial,sans-serif;padding:32px;color:#1a1f36;font-size:13px}h2{color:#4c6ef5}table{width:100%;border-collapse:collapse}.header{display:flex;justify-content:space-between;border-bottom:2px solid #4c6ef5;padding-bottom:12px;margin-bottom:16px}</style>
+</head><body>
+<div class="header">
+  <div><strong style="color:#4c6ef5;font-size:15px">Apollo Multispeciality Hospital</strong><br><small>21, Greams Lane, Chennai · Tel: 044-2829-3333</small></div>
+  <div style="text-align:right"><strong>MRD: ${patient.id}</strong><br><small>Date: ${patient.lastVisit}</small></div>
+</div>
+<p style="text-align:center;background:#eef2ff;padding:6px;border-radius:6px;color:#4c6ef5;font-weight:bold">OUTPATIENT MEDICAL REPORT</p>
+<table style="background:#f4f6fb;border-radius:8px;margin-bottom:16px">
+  <tr><td style="padding:4px 8px;color:#8898aa">Patient Name</td><td style="padding:4px 8px;font-weight:600">${patient.name}</td><td style="padding:4px 8px;color:#8898aa">Age / Gender</td><td style="padding:4px 8px;font-weight:600">${patient.age}Y / ${patient.gender}</td></tr>
+  <tr><td style="padding:4px 8px;color:#8898aa">Contact</td><td style="padding:4px 8px">${patient.phone}</td><td style="padding:4px 8px;color:#8898aa">Consultant</td><td style="padding:4px 8px">${patient.assignedDoctor}</td></tr>
+</table>
+<h2>Chief Complaints</h2>
+<p>${patient.disease === 'Heart' ? 'Palpitation, chest discomfort, and exertional dyspnoea' : patient.disease === 'BP' ? 'Persistent headaches, dizziness, and visual disturbances' : patient.disease === 'Sugar' ? 'Polyuria, polydipsia, and fatigue over the past 3 months' : 'Chronic fatigue, sleep disturbances, and anxiety episodes'}</p>
+<h2>Clinical Findings</h2>
+<table style="width:100%">${metrics}</table>
+<h2>AI Assessment</h2>
+<p>${aiSummary}</p>
+<h2>Risk Level</h2>
+<p><strong>${patient.riskLevel}</strong></p>
+<h2>Suggested Actions</h2>
+${actions}
+<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e8ecf4;display:flex;justify-content:space-between">
+  <div><strong>${patient.assignedDoctor}</strong><br><small>Consultant Physician · MCI-45621</small></div>
+  <div style="border:2px solid #4c6ef5;padding:8px 16px;text-align:center;color:#4c6ef5"><strong>DIGITAL SEAL</strong><br><small>Apollo Hospital</small></div>
+</div>
+</body></html>`;
+    const w = window.open("", "_blank", "width=900,height=700")!;
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => { w.print(); }, 400);
+}
 
 interface PatientDetailProps {
     patient: Patient;
@@ -402,6 +444,13 @@ export default function PatientDetail({ patient, onClose }: PatientDetailProps) 
                     </div>
                     <div className="flex items-center gap-2">
                         <span className="text-xs px-2 py-0.5 rounded font-medium" style={{ background: "#1e40af", color: "#93c5fd" }}>PDF</span>
+                        <button
+                            onClick={() => downloadMedicalReportPDF(patient, displaySummary || patient.llmSummary || "")}
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
+                            style={{ background: "rgba(76,110,245,0.25)", color: "#93c5fd" }}
+                            title="Download medical report as PDF">
+                            <Download size={12} /> Download PDF
+                        </button>
                         <button onClick={onClose} className="p-1 rounded hover:bg-white/10 transition-colors">
                             <X size={15} style={{ color: "#94a3b8" }} />
                         </button>
